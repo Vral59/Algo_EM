@@ -1,0 +1,266 @@
+---
+title: 'TP Algorithme EM'
+author: "Buchon Valentin, Louan Ourvouai"
+date: "05 November 2022"
+output:
+  pdf_document: 
+    fig_caption: yes
+  html_document: default
+fontsize: 10pt
+---
+<style type="text/css">
+  body .main-container{
+   max-width: 1100px !important;
+   width: 1100px !important;
+  }
+  body {
+    max-width: 1100px !important;
+    margin = auto;
+    padding: 5em;
+  }
+  body, td{
+    font-size: 2em;
+  }
+  code.r{
+    font-size: 1em;
+  }
+  pre{
+    font-size: 1em;
+    color: #191970;
+  }
+</style>
+
+```{r color, include=FALSE}
+colorize <- function(x, color) {
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+```
+<!-- Does it show color? `r colorize("some words in red", "red")` -->
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(error = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+knitr::opts_chunk$set(fig.align = "center")
+knitr::opts_chunk$set(echo = TRUE, results="hide")
+sol=FALSE
+```
+
+# Simulation
+
+## Question 1
+
+On simule l'échantillon $x_1$ de taille $n = 100$ d'une loi de Poisson de paramètre $\lambda = 3$.
+```{r, echo = FALSE}
+
+n1<-100
+lambda1<-3
+x1<-rpois(n1, lambda1)
+
+hist(x1, main = "Histogramme de x_1")
+
+```
+
+
+## Question 2
+
+On simule l'échantillon de taille $n = 200$ d'une loi de Poisson de paramètre $\lambda = 15$.
+```{r, echo = FALSE}
+
+n2<-200
+lambda2<-15
+x2<-rpois(n2, lambda2)
+
+hist(x2, main = "Histogramme de x_2")
+
+```
+
+
+## Question 3
+
+On crée alors un vecteur contenant $100$ valeurs égales à $1$, et $200$ valeurs égales à $2$.
+```{r,results='asis' , echo = FALSE}
+
+v<-c(rep(1,n1), rep(2,n2))
+cat('\n\n')
+cat("Vecteur : ", v)
+
+```
+
+
+## Question 4
+
+Pour simuler un mélange de Poisson de paramètres $\lambda_1 = 3$ et $\lambda_2 = 15$, on peut utiliser les simulations précédentes (en les pondérant par les coefficients $\pi_1 = 0.33$ et $\pi_2 = 1 - \pi_1 = 0.67$).
+```{r, echo = FALSE}
+
+pi1<- 0.33
+pi2<- 1 - pi1
+xm<- sample(c(x1, x2))
+
+hist(xm, main = "Histogramme de x_m, lois de Poisson à deux composantes")
+
+```
+
+
+# Algorithme EM pour un mélange de loi de Poisson à K composantes
+
+## Question 1
+
+La création de l'initialisation est faite dans le code qui suit. On initialise les proportions $\pi_k$ toutes égales à $\frac{1}{K}$, et les paramètres $\lambda_k$ choisis aléatoirement parmi les observations.
+```{r}
+
+# Paramètres du problèmes
+# Ici K = 2 et n = 300
+K<-2
+n<-300
+
+init<-function(X, K) {
+  theta<-c()
+  len = length(X)
+  for (i in 1:K) {
+    theta[i] = X[runif(1, min = 1, max = len)]
+  }
+  return(c(rep(1/K, K), theta))
+}
+
+```
+
+
+## Question 2
+
+Le code qui suit permet de créer l'étape **E**. Le but de cette fonction est de retourner la matrice $T = \left ( t_{i,k}^{(q)} \right )_{1 \leq i \leq n,\\ 1 \leq k \leq K}$ à l'étape $q$.  
+Cette matrice est contituée des coefficients $t_{i,k}^{(q)}$ défini comme suivant : $t_{i,k}^{(q)} = \mathbb{P} \left ( z_i = k | x_i, \theta^{(q)} \right )$  
+Les variables aléatoires $\left ( z_i \right )_{1 \leq i \leq n}$ sont les variables dont chacunes des observations $\left ( x_i \right )_{1 \leq i \leq n}$ proviennent.  
+D'après la formule de Bayes, on peut calculer cette valeur. On obtient alors la formule suivante.  
+$$\begin{aligned} \displaystyle
+t_{i,k}^{(q)} &= \mathbb{P} \left ( z_i = k | x_i, \theta^{(q)}_k \right ) \\
+&= \frac{\mathbb{P} \left ( x = x_i | z_i = k, \theta^{(q)}_k \right ) \mathbb{P} \left ( z_i = k, \theta^{(q)}_k \right )}{\mathbb{P} \left ( x = x_i, \theta^{(q)}_k \right )}\\
+&= \frac{\pi_k f(x_i, \theta^{(q)}_k)}{F(x_i, \Theta^{(q)})}
+\end{aligned}$$  
+(Avec $F$ la densité totale telle que $\displaystyle F(x, \Theta) = \sum_{k = 1}^K \pi_k f(x, \theta_k)$)
+```{r}
+
+# Implémentation de la densité totale de poisson, utile dans notre cas
+density_pois_tot<-function(x, theta) {
+  somme<-0
+  K_<- as.integer(length(theta)/2)
+  for (k in 1:K_) {
+    somme<- somme + theta[k] * dpois(x, theta[k + K_])
+  }
+  return(somme)
+}
+
+```
+```{r}
+
+E_step<-function(dens, dens_tot, theta_q, X, K) {
+  T<-matrix(nrow = length(X), ncol = K)
+  for (i in 1:length(X)) {
+    for (k in 1:K) {
+      T[i,k]<-theta_q[k] * dens(X[i],theta_q[k + K]) / dens_tot(X[i], theta_q)
+    }
+  }
+  return(T)
+}
+
+```
+
+
+## Question 4
+
+On cherche alors à maximiser $Q(\theta, \theta^{(q)})$, voici son expression. 
+$$\begin{aligned}
+Q(\theta, \theta^{(q)}) &= \sum_{i = 1}^n \sum_{k = 1}^K t_{i,k} \log ( \pi_k f_k (x_i, \theta_k))\\
+&= \sum_{i = 1}^n \sum_{k = 1}^K t_{i,k} \left ( \log \pi_k + \log \left ( \frac{e^{-\lambda_k}}{x_i !} \lambda_k^{x_i} \right) \right) \\
+&= \sum_{i = 1}^n \sum_{k = 1}^K t_{i,k} \left ( \log \pi_k - \lambda_k - \log x_i! + x_i \log (\lambda_k) \right)
+\end{aligned}$$  
+On cherche à maximiser cette quantité, on annule donc la dérivée par rapport à un paramètre $\lambda_{k_0}$.  
+\begin{center} $$\begin{aligned}
+& \frac{\partial Q(\theta, \theta^{(q)})}{\partial \lambda_{k_0}} = 0\\
+\iff & \frac{\partial}{\partial \lambda_{k_0}} \left (  \sum_{i = 1}^n \sum_{k = 1}^K t_{i,k} \left ( \log \pi_k - \lambda_k - \log x_i! + x_i \log (\lambda_k) \right) \right ) = 0\\
+\iff & \sum_{i = 1}^n t_{i,k_0} \left ( -1 + \frac{x_i}{\lambda_{k_0}} \right) = 0\\
+\iff & \frac{1}{\lambda_{k_0}} \sum_{i = 1}^n t_{i,k_0} x_i = \sum_{i = 1}^n t_{i,k_0}\\
+\iff & \lambda_{k_0} = \frac{\sum_{i = 1}^n t_{i,k_0} x_i}{\sum_{i = 1}^n t_{i,k_0}}
+\end{aligned} $$\end{center}
+On obtient donc une formule pour $\lambda_{k_0}^{(q+1)}$.  
+Pour obtenir les proportions $\left ( \pi_k \right)_{1 \leq k \leq K}$, il faut résoudre un problème d'optimisation sous contraintes (car la somme des proportions doit valoir $1$, soit $\sum_{k = 1}^K \pi_k = 1$ ).  
+On définit alors le Lagrangien du problème comme suivant.  
+$\mathcal{L}(\theta, \lambda) = Q( \theta, \theta^{(q)}) + \lambda \left ( \sum_{k = 1}^K \pi_k - 1 \right )$  
+On cherche alors à résoudre ce système.  
+\begin{center} $$ \displaystyle
+\begin{cases}
+\frac{\partial \mathcal{L}(\theta, \lambda)}{\partial \theta} = 0 \\
+\frac{\partial \mathcal{L}(\theta, \lambda)}{\partial \lambda} = 0
+\end{cases}
+\iff
+\begin{cases}
+\frac{\partial}{\partial \pi_{k_0}} \left ( \sum_{i = 1}^n t_{i,k_0} \log \pi_{k_0} \right ) +  \frac{\partial}{\partial \pi_{k_0}} \left ( \lambda \sum_{k = 1}^K \pi_k - 1\right ) = 0 \\
+\sum_{k = 1}^K \pi_k - 1 = 0
+\end{cases}
+$$
+\end{center}
+\begin{center} $$ \displaystyle
+\iff
+\begin{cases}
+\frac{1}{\pi_{k_0}} \sum_{i = 1}^n t_{i,k_0} - \lambda = 0 \\
+\sum_{k = 1}^K \pi_k = 1
+\end{cases}
+\iff
+\begin{cases}
+\pi_{k_0} = \frac{1}{\lambda} \sum_{i = 1}^n t_{i,k_0} \\
+\sum_{k = 1}^K \pi_k = 1
+\end{cases}
+$$
+\end{center}
+Comme on a que $\lambda = \sum_{i = 1}^n \sum_{k = 1}^K t_{i,k} = \sum_{i=1}^n 1 = n$, on obtient alors la formule suivante pour la proportion $k_0$ à l'itération $(q+1)$.  
+$\displaystyle \pi_{k_0}^{(q+1)} = \frac{1}{n} \sum_{i = 1}^n t_{i,k_0}$  
+On peut alors implémenter l'étape M calculant les paramètre $\theta^{(q+1)}$.
+```{r}
+
+M_step<-function(T_, X) {
+  theta_q<-c()
+  n<-length(X)
+  K<-dim(T_)[2]
+  for (k in 1:K) {
+    sum_ti_xi<- 0
+    sum_ti<- 0
+    for (i in 1:n) {
+      sum_ti_xi<-sum_ti_xi + T_[i,k]*X[i]
+      sum_ti<-sum_ti + T_[i,k]
+    }
+    theta_q[k]<- sum_ti / n
+    theta_q[k + K]<- sum_ti_xi / sum_ti
+  }
+  return(theta_q)
+}
+
+```
+
+
+## Question 5
+
+Pour appliquer l'algorithme EM, on applique les étapes **E** et **M** jusqu'à convergence. Cela donne l'implémentation suivante.
+```{r}
+
+algorithme_EM<-function(dens, dens_tot, X, K, eps) {
+  theta_q<-init(X, K)
+  T_<-E_step(dens,dens_tot, theta_q, X, K)
+  theta_q1<-M_step(T_, X)
+  while (sum((theta_q - theta_q1)^2) / sum((theta_q)^2) > eps) {
+    theta_q<-theta_q1
+    T_<-E_step(dens,dens_tot, theta_q1, X, K)
+    theta_q1<-M_step(T_, X)
+  }
+  return(theta_q1)
+}
+```
+
+```{r, results='asis', echo = FALSE}
+cat("\n\n")
+cat("Résultat :",algorithme_EM(dpois, density_pois_tot, xm, K, 10^(-6)))
+
+```
+Ce qui sont bien les résultats attendu avec $\lambda_1 = 3$, $\lambda_2 = 15$, $\pi_1 = \frac{1}{3}$ et $\pi_2 = \frac{2}{3}$
